@@ -1,0 +1,302 @@
+
+import pandas as pd
+import numpy as np
+from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OrdinalEncoder
+import warnings
+warnings.filterwarnings('ignore')
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+INPUT_FILE = 'filtered_output1.csv'
+OUTPUT_FILE = 'cart_dataset.csv'
+SEED = 42
+TEST_SIZE = 0.2
+MAX_ITER = 10
+TARGET_COLUMN = 'Summary Work Effort'
+
+# ============================================================================
+# COLUMN DEFINITIONS
+# ============================================================================
+
+NUMERICAL_COLUMNS = [
+    "Functional Size", "Adjusted Function Points", "Value Adjustment Factor",
+    "Normalised Level 1 PDR (ufp)", "Normalised PDR (ufp)", "Defect Density",
+    "Speed of Delivery", "Project Elapsed Time", "Project Inactive Time",
+    "Total Defects Delivered", "Resource Level", "Max Team Size",
+    "Ratio of Project Work Effort to Non-Project Activity", "Lines of Code"
+]
+
+CATEGORICAL_COLUMNS = [
+    "Industry Sector", "Organisation Type", "Application Group", "Application Type",
+    "Development Type", "Development Platform", "Language Type",
+    "Primary Programming Language", "Count Approach", "Relative Size",
+    "Project Activity Scope", "Software Process CMM", "Software Process CMMI",
+    "Software Process ISO", "Software Process Other", "Architecture",
+    "Development Methodologies", "Development Techniques", "Planning Documents",
+    "Specification Documents", "Specification Techniques", "Design Documents",
+    "Design Techniques", "Build Products", "Build Activity", "Test Documents",
+    "Test Activity", "Implement Documents", "Functional Sizing Technique",
+    "FP Standards All", "Percentage of Uncollected Work Effort"
+]
+
+# ============================================================================
+# CART IMPUTATION FUNCTIONS
+# ============================================================================
+
+def impute_numerical_with_cart(X_train, X_test, numerical_cols):
+    """
+    Impute missing values in numerical columns using DecisionTreeRegressor.
+    
+    Parameters:
+    -----------
+    X_train, X_test : DataFrames
+        Training and test data
+    numerical_cols : list
+        List of numerical column names
+    
+    Returns:
+    --------
+    X_train_imputed, X_test_imputed : DataFrames
+        Imputed DataFrames
+    """
+    
+    X_train_imputed = X_train.copy()
+    X_test_imputed = X_test.copy()
+    
+    for col in numerical_cols:
+        if X_train_imputed[col].isnull().any() or X_test_imputed[col].isnull().any():
+            print(f"  Imputing numerical column: {col}")
+            
+            # Prepare training data (rows without missing values)
+            train_mask = X_train_imputed[col].notna()
+            X_train_known = X_train_imputed[train_mask].drop(columns=[col])
+            y_train_known = X_train_imputed.loc[train_mask, col]
+            
+            # Train DecisionTreeRegressor
+            model = DecisionTreeRegressor(
+                max_depth=5,
+                min_samples_split=10,
+                min_samples_leaf=5,
+                random_state=SEED
+            )
+            model.fit(X_train_known, y_train_known)
+            
+            # Impute training data
+            train_missing_mask = X_train_imputed[col].isna()
+            if train_missing_mask.any():
+                X_train_missing = X_train_imputed[train_missing_mask].drop(columns=[col])
+                X_train_imputed.loc[train_missing_mask, col] = model.predict(X_train_missing)
+            
+            # Impute test data
+            test_missing_mask = X_test_imputed[col].isna()
+            if test_missing_mask.any():
+                X_test_missing = X_test_imputed[test_missing_mask].drop(columns=[col])
+                X_test_imputed.loc[test_missing_mask, col] = model.predict(X_test_missing)
+    
+    return X_train_imputed, X_test_imputed
+
+
+def impute_categorical_with_cart(X_train, X_test, categorical_cols, encoders=None):
+    """
+    Impute missing values in categorical columns using DecisionTreeClassifier.
+    
+    Parameters:
+    -----------
+    X_train, X_test : DataFrames
+        Training and test data
+    categorical_cols : list
+        List of categorical column names
+    encoders : dict
+        Dictionary of fitted OrdinalEncoders
+    
+    Returns:
+    --------
+    X_train_imputed, X_test_imputed : DataFrames
+        Imputed DataFrames
+    encoders : dict
+        Dictionary of fitted OrdinalEncoders
+    """
+    
+    X_train_imputed = X_train.copy()
+    X_test_imputed = X_test.copy()
+    
+    if encoders is None:
+        encoders = {}
+    
+    for col in categorical_cols:
+        if X_train_imputed[col].isnull().any() or X_test_imputed[col].isnull().any():
+            print(f"  Imputing categorical column: {col}")
+            
+            # Encode categorical column
+            if col not in encoders:
+                encoder = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
+                # Combine train and test to fit encoder
+                combined = pd.concat([X_train_imputed[col], X_test_imputed[col]], axis=0)
+                encoder.fit(combined.values.reshape(-1, 1))
+                encoders[col] = encoder
+            
+            # Transform to numeric
+            X_train_encoded = encoders[col].transform(X_train_imputed[col].values.reshape(-1, 1)).ravel()
+            X_test_encoded = encoders[col].transform(X_test_imputed[col].values.reshape(-1, 1)).ravel()
+            
+            # Prepare training data (rows without missing values)
+            train_mask = ~np.isnan(X_train_encoded)
+            X_train_known = X_train_imputed[train_mask].drop(columns=[col])
+            y_train_known = X_train_encoded[train_mask]
+            
+            # Train DecisionTreeClassifier
+            model = DecisionTreeClassifier(
+                max_depth=5,
+                min_samples_split=10,
+                min_samples_leaf=5,
+                random_state=SEED
+            )
+            model.fit(X_train_known, y_train_known)
+            
+            # Impute training data
+            train_missing_mask = np.isnan(X_train_encoded)
+            if train_missing_mask.any():
+                X_train_missing = X_train_imputed[train_missing_mask].drop(columns=[col])
+                predicted = model.predict(X_train_missing)
+                X_train_imputed.loc[train_missing_mask, col] = encoders[col].inverse_transform(
+                    predicted.reshape(-1, 1)
+                ).ravel()
+            
+            # Impute test data
+            test_missing_mask = np.isnan(X_test_encoded)
+            if test_missing_mask.any():
+                X_test_missing = X_test_imputed[test_missing_mask].drop(columns=[col])
+                predicted = model.predict(X_test_missing)
+                X_test_imputed.loc[test_missing_mask, col] = encoders[col].inverse_transform(
+                    predicted.reshape(-1, 1)
+                ).ravel()
+    
+    return X_train_imputed, X_test_imputed, encoders
+
+# ============================================================================
+# MAIN EXECUTION
+# ============================================================================
+
+def main():
+    """Execute the CART imputation pipeline."""
+    
+    print("=" * 70)
+    print("CART-BASED IMPUTATION")
+    print("=" * 70)
+    
+    # ------------------------------------------------------------------------
+    # Step 1: Load and Explore Data
+    # ------------------------------------------------------------------------
+    
+    print(f"\nLoading data from: {INPUT_FILE}")
+    df = pd.read_csv(INPUT_FILE)
+    
+    print(f"Initial data shape: {df.shape}")
+    print(f"Initial missing values: {df.isnull().sum().sum()}")
+    print(f"Rows with missing values: {df.isnull().any(axis=1).sum()} / {len(df)}")
+    
+    # ------------------------------------------------------------------------
+    # Step 2: Split Data (Prevents Data Leakage!)
+    # ------------------------------------------------------------------------
+    
+    print("\n" + "-" * 50)
+    print("Splitting Data (Before Imputation)")
+    print("-" * 50)
+    
+    # Split features and target
+    X = df.drop(columns=[TARGET_COLUMN])
+    y = df[TARGET_COLUMN]
+    
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=TEST_SIZE, random_state=SEED
+    )
+    
+    print(f"Training set: {X_train.shape[0]} samples")
+    print(f"Test set: {X_test.shape[0]} samples")
+    
+    # ------------------------------------------------------------------------
+    # Step 3: Impute Training Data
+    # ------------------------------------------------------------------------
+    
+    print("\n" + "-" * 50)
+    print("Step 1: Imputing Training and Test Data with CART")
+    print("-" * 50)
+    
+    # Impute numerical columns
+    print("\nImputing numerical columns...")
+    X_train_imputed, X_test_imputed = impute_numerical_with_cart(
+        X_train, X_test, NUMERICAL_COLUMNS
+    )
+    
+    # Impute categorical columns
+    print("\nImputing categorical columns...")
+    X_train_imputed, X_test_imputed, encoders = impute_categorical_with_cart(
+        X_train_imputed, X_test_imputed, CATEGORICAL_COLUMNS
+    )
+    
+    print("\n✅ Imputation complete")
+    
+    # ------------------------------------------------------------------------
+    # Step 4: Verify Imputation
+    # ------------------------------------------------------------------------
+    
+    print("\n" + "-" * 50)
+    print("Step 2: Verifying Imputation")
+    print("-" * 50)
+    
+    train_missing = X_train_imputed.isnull().sum().sum()
+    test_missing = X_test_imputed.isnull().sum().sum()
+    
+    print(f"Missing values in training data after imputation: {train_missing}")
+    print(f"Missing values in test data after imputation: {test_missing}")
+    
+    if train_missing == 0 and test_missing == 0:
+        print("✅ All missing values successfully imputed!")
+    else:
+        print(f"⚠️ Warning: {train_missing + test_missing} missing values remain.")
+    
+    # ------------------------------------------------------------------------
+    # Step 5: Recombine and Save
+    # ------------------------------------------------------------------------
+    
+    print("\n" + "-" * 50)
+    print("Step 3: Recombining and Saving")
+    print("-" * 50)
+    
+    # Add target back
+    X_train_imputed[TARGET_COLUMN] = y_train.values
+    X_test_imputed[TARGET_COLUMN] = y_test.values
+    
+    # Combine train and test
+    df_imputed = pd.concat([X_train_imputed, X_test_imputed])
+    df_imputed = df_imputed.sort_index()
+    
+    # Round numerical columns
+    for col in NUMERICAL_COLUMNS:
+        if col in df_imputed.columns:
+            df_imputed[col] = df_imputed[col].round(2)
+    
+    # ------------------------------------------------------------------------
+    # Step 6: Save Output
+    # ------------------------------------------------------------------------
+    
+    df_imputed.to_csv(OUTPUT_FILE, index=False)
+    
+    print("\n" + "=" * 70)
+    print("CART IMPUTATION COMPLETE!")
+    print(f"Output saved to: {OUTPUT_FILE}")
+    print("=" * 70)
+    
+    # Display sample
+    print("\nSample of imputed data:")
+    print(df_imputed.head())
+    
+    return df_imputed
+
+
+if __name__ == "__main__":
+    main()

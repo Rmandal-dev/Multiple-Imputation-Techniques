@@ -1,0 +1,25 @@
+
+
+import pandas as pd
+
+df = pd.read_csv('filtered_output1.csv')
+
+# Separate numerical and categorical columns
+numerical_cols = df.select_dtypes(include=['float64', 'int64']).columns
+categorical_cols = df.select_dtypes(include=['object', 'category']).columns
+
+# Impute numerical with mean
+for col in numerical_cols:
+    if df[col].isnull().any():
+        df[col].fillna(df[col].mean(), inplace=True)
+        df[col] = df[col].round(2)
+
+# Impute categorical with mode
+for col in categorical_cols:
+    if df[col].isnull().any():
+        mode_val = df[col].mode()
+        if not mode_val.empty:
+            df[col].fillna(mode_val.iloc[0], inplace=True)
+
+df.to_csv('mean_dataset.csv', index=False)
+print("Mean imputation complete!")

@@ -1,0 +1,461 @@
+# ============================================================================
+# MANUAL DOMAIN-EXPERT IMPUTATION
+# Software Effort Estimation - ISBSG Dataset
+# ============================================================================
+# 
+# This script performs manual imputation based on ISBSG field descriptions,
+# domain expertise, and software engineering principles. The imputation follows
+# a systematic 5-step process:
+#
+#   1. Impute Size Metrics (AFP, VAF, UFP)
+#   2. Impute Effort-Related Metrics (Normalised Effort, PDR)
+#   3. Impute Schedule Metrics (Elapsed Time, Speed of Delivery)
+#   4. Impute Categorical Features (Co-imputation)
+#   5. Impute Derived Features (Relative Size, LOC)
+#
+# ============================================================================
+
+import pandas as pd
+import numpy as np
+from sklearn.impute import SimpleImputer
+import warnings
+warnings.filterwarnings('ignore')
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+INPUT_FILE = 'filtered_output1.csv'
+OUTPUT_FILE = 'manual_dataset.csv'
+
+# Language to LOC conversion factors (ISBSG standard)
+# Format: 'Language': (Low_Factor, High_Factor)
+LOC_CONVERSION_FACTORS = {
+    'COBOL': (150, 250),
+    'PL/I': (160, 260),
+    'C++': (180, 280),
+    'SQL': (190, 290),
+    'C#': (200, 300),
+    'COOL:Gen': (170, 270),
+    'DELPHI': (160, 240),
+    'PL/SQL': (190, 280),
+    'ASP': (150, 230),
+    'Shell': (170, 250),
+    'Visual C++': (200, 300),
+    'TIBCO': (160, 260),
+    'HTML': (180, 270),
+    'EASYTRIEVE': (140, 240),
+    'Unix Shell': (150, 250),
+    'HPS': (130, 230),
+    'Pro*C': (160, 260),
+    'CSP': (120, 220),
+    'CLIPPER': (140, 220),
+    'Siebel': (180, 290),
+    'MATLAB': (190, 300),
+    'Adobe Flex': (170, 270),
+    'SLOGAN': (160, 260),
+    'BPM': (140, 240),
+    'SAS': (180, 270),
+    'IIS': (150, 250),
+    'PERIPHONICS': (130, 230),
+    'RALLY': (140, 240),
+    'VisualAge': (170, 270),
+    'Shell, C': (150, 250),
+    'AppBuilder': (160, 260),
+    'BASIC': (140, 220),
+    'OutlookVBA': (130, 230),
+    'Centura': (150, 250),
+    'Ada': (170, 270),
+    'C/AL': (140, 240),
+    'XML': (190, 280),
+    'ABF': (120, 220),
+    'STAFFWARE': (160, 260),
+    'SAPIENS': (140, 240),
+    'MAPPER': (130, 230),
+    'iPlanet Netscape Application Server': (180, 280),
+    'REXX': (160, 250),
+    'IEF': (150, 240),
+    'PowerPlay': (170, 260),
+    'EJB': (180, 270),
+    'Pega Workflows': (190, 290),
+    'Unix': (160, 250),
+    'Caa': (150, 240),
+    'LEX': (130, 230),
+    'Magic': (140, 220),
+    'ACCEL': (150, 230),
+    'BEA Weblogic': (180, 270),
+    'MS-Navision Properitory Language': (190, 280),
+    'gcc': (170, 260),
+    'AB INITIO': (180, 270),
+    'XGML': (190, 280),
+    'ADO.Net': (170, 260),
+    'Huron/Object Star': (160, 250),
+    'Jdeveloper': (190, 290),
+    'Java': (200, 300),
+    'Visual Basic': (180, 270),
+    'C': (210, 310),
+    'Oracle': (220, 320),
+    '.Net': (190, 290),
+    'ABAP': (150, 250),
+    'NATURAL': (140, 240),
+    'Access': (150, 230),
+    'PowerBuilder': (160, 260),
+    'TELON': (130, 220),
+    'Lotus Notes': (150, 240),
+    'PHP': (170, 260),
+    'Assembler': (180, 270),
+    'Smalltalk': (140, 220),
+    'JavaScript': (190, 280),
+    'RPG': (160, 250),
+    'Proprietary Agile Platform': (150, 230),
+    'ASP.Net': (170, 260),
+    'Script Language': (140, 220),
+    'Datastage': (190, 280),
+    'ColdFusion': (180, 270),
+    'PASCAL': (160, 260),
+    'ADS/Online': (170, 260),
+    'FOCUS': (150, 230),
+    'IDEAL': (130, 220),
+    'iOS': (190, 280),
+    'FORTRAN': (170, 260),
+    'INGRES': (150, 230),
+    'UNIFACE': (140, 220),
+    'HLL/WB': (160, 250),
+    'Upfront': (150, 230),
+    'RPL': (170, 260),
+    'APPS': (190, 280),
+    'CICS': (160, 260),
+    'Perl': (170, 260),
+    'Visual Studio .Net': (180, 270),
+    'Object oriented language': (160, 250),
+    'ASAP': (170, 260),
+    'Periproducer': (140, 230),
+    'Data base language': (180, 270),
+    'PYTHON': (210, 310),
+    'DRIFT': (140, 230),
+    'Spreadsheet': (150, 230),
+    'MANTIS': (160, 250),
+    'TNSDL': (180, 270),
+    'Jam': (140, 220),
+    'Informatica PowerCenter': (190, 290),
+    'LISP': (170, 260),
+    'J2EE': (190, 280),
+    'Brightware proprietary': (160, 250),
+    'ARBOR/BP': (150, 240),
+    'COGNOS': (180, 270),
+    'IBM WTX': (190, 280),
+    'Enablon': (140, 230),
+    'Must Modeller': (170, 260),
+    'Express': (150, 240),
+    'SLEL': (160, 250),
+    'A:G': (140, 220),
+    'BO': (190, 280),
+    'NCR teradata scripting': (180, 270),
+    'Visual FoxPro': (150, 240)
+}
+
+# Categorical columns for co-imputation
+CATEGORICAL_COLS_GROUP1 = [
+    'Industry Sector', 'Organisation Type', 'Application Group', 'Application Type',
+    'Development Type', 'Development Platform', 'Language Type',
+    'Primary Programming Language', 'Count Approach'
+]
+
+CATEGORICAL_COLS_GROUP2 = [
+    'Project Activity Scope', 'Software Process CMM', 'Software Process CMMI',
+    'Software Process ISO', 'Software Process Other', 'Architecture',
+    'Development Methodologies', 'Development Techniques', 'Planning Documents',
+    'Specification Documents', 'Specification Techniques', 'Design Documents',
+    'Design Techniques', 'Build Products', 'Build Activity', 'Test Documents',
+    'Test Activity', 'Implement Documents', 'Functional Sizing Technique',
+    'FP Standards All', 'Percentage of Uncollected Work Effort'
+]
+
+# Columns to round after imputation
+ROUND_COLUMNS = [
+    'Functional Size', 'Adjusted Function Points', 'Value Adjustment Factor',
+    'Normalised Work Effort Level 1', 'Normalised Work Effort', 'Summary Work Effort',
+    'Normalised Level 1 PDR (ufp)', 'Normalised PDR (ufp)', 'Pre 2002 PDR',
+    'Defect Density', 'Speed of Delivery', 'Project Elapsed Time'
+]
+
+# ============================================================================
+# STEP 1: LOAD DATA
+# ============================================================================
+
+print("=" * 70)
+print("MANUAL DOMAIN-EXPERT IMPUTATION")
+print("=" * 70)
+print(f"Loading data from: {INPUT_FILE}")
+
+data = pd.read_csv(INPUT_FILE)
+print(f"Initial shape: {data.shape}")
+print(f"Missing values before imputation: {data.isnull().sum().sum()}")
+
+# ============================================================================
+# STEP 2: IMPUTE SIZE METRICS (AFP, VAF, UFP)
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 1: Imputing Size Metrics (AFP, VAF, UFP)")
+print("-" * 50)
+
+def impute_size_metrics(row):
+    """
+    Impute Adjusted Function Points (AFP), Value Adjustment Factor (VAF),
+    and Functional Size (UFP) using ISBSG standard relationships.
+    
+    Rules:
+    1. If UFP given, AFP and VAF blank → AFP = UFP, VAF = 1
+    2. If UFP and VAF given, AFP blank → AFP = UFP × VAF
+    3. If AFP given, UFP and VAF blank → UFP = AFP, VAF = 1
+    4. If UFP and AFP given, VAF blank → VAF = AFP / UFP
+    5. If all blank → UFP = column mean, AFP = UFP, VAF = 1
+    """
+    
+    ufp = row.get('Functional Size')
+    afp = row.get('Adjusted Function Points')
+    vaf = row.get('Value Adjustment Factor')
+    
+    # Rule 1: UFP given, AFP and VAF blank
+    if pd.notna(ufp) and pd.isna(afp) and pd.isna(vaf):
+        row['Adjusted Function Points'] = ufp
+        row['Value Adjustment Factor'] = 1.0
+    
+    # Rule 2: UFP and VAF given, AFP blank
+    elif pd.notna(ufp) and pd.notna(vaf) and pd.isna(afp):
+        row['Adjusted Function Points'] = ufp * vaf
+    
+    # Rule 3: AFP given, UFP and VAF blank
+    elif pd.isna(ufp) and pd.notna(afp) and pd.isna(vaf):
+        row['Functional Size'] = afp
+        row['Value Adjustment Factor'] = 1.0
+    
+    # Rule 4: UFP and AFP given, VAF blank
+    elif pd.notna(ufp) and pd.notna(afp) and pd.isna(vaf):
+        if ufp != 0:
+            row['Value Adjustment Factor'] = afp / ufp
+        else:
+            row['Value Adjustment Factor'] = 1.0
+    
+    # Rule 5: All blank
+    elif pd.isna(ufp) and pd.isna(afp) and pd.isna(vaf):
+        # Will be handled globally after
+        pass
+    
+    return row
+
+# Apply size metric imputation
+data = data.apply(impute_size_metrics, axis=1)
+
+# Handle remaining missing values with global strategies
+for col in ['Functional Size', 'Adjusted Function Points']:
+    if data[col].isnull().any():
+        data[col].fillna(data[col].mean(), inplace=True)
+
+if data['Value Adjustment Factor'].isnull().any():
+    data['Value Adjustment Factor'].fillna(1.0, inplace=True)
+
+# ============================================================================
+# STEP 3: IMPUTE EFFORT-RELATED METRICS
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 2: Imputing Effort-Related Metrics")
+print("-" * 50)
+
+def impute_effort_metrics(row):
+    """
+    Impute effort-related metrics including Normalised Work Effort,
+    Normalised Work Effort Level 1, and Summary Work Effort.
+    """
+    
+    nwe_l1 = row.get('Normalised Work Effort Level 1')
+    nwe = row.get('Normalised Work Effort')
+    swe = row.get('Summary Work Effort')
+    ufp = row.get('Functional Size')
+    
+    # If all effort metrics are blank, use mean
+    if pd.isna(nwe_l1) and pd.isna(nwe) and pd.isna(swe):
+        # Will be handled globally
+        pass
+    
+    # Normalised Level 1 PDR calculation
+    if pd.notna(nwe_l1) and pd.notna(ufp) and ufp != 0:
+        row['Normalised Level 1 PDR (ufp)'] = nwe_l1 / ufp
+    
+    # Normalised PDR calculation
+    if pd.notna(nwe) and pd.notna(ufp) and ufp != 0:
+        row['Normalised PDR (ufp)'] = nwe / ufp
+    
+    # Pre-2002 PDR calculation
+    if pd.notna(swe) and pd.notna(ufp) and ufp != 0:
+        row['Pre 2002 PDR'] = swe / ufp
+    
+    return row
+
+data = data.apply(impute_effort_metrics, axis=1)
+
+# Fill remaining effort metrics with mean
+for col in ['Normalised Work Effort Level 1', 'Normalised Work Effort', 'Summary Work Effort']:
+    if data[col].isnull().any():
+        data[col].fillna(data[col].mean(), inplace=True)
+
+# ============================================================================
+# STEP 4: IMPUTE QUALITY METRICS
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 3: Imputing Quality Metrics")
+print("-" * 50)
+
+# Set missing defect metrics to 0
+for col in ['Defect Density', 'Total Defects Delivered']:
+    if data[col].isnull().any():
+        data[col].fillna(0, inplace=True)
+
+# ============================================================================
+# STEP 5: IMPUTE SCHEDULE METRICS
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 4: Imputing Schedule Metrics")
+print("-" * 50)
+
+# Fill missing Project Elapsed Time with mean
+if data['Project Elapsed Time'].isnull().any():
+    data['Project Elapsed Time'].fillna(data['Project Elapsed Time'].mean(), inplace=True)
+
+# Set missing Project Inactive Time to 0
+if data['Project Inactive Time'].isnull().any():
+    data['Project Inactive Time'].fillna(0, inplace=True)
+
+# Calculate Speed of Delivery
+data['Speed of Delivery'] = data.apply(
+    lambda row: row['Functional Size'] / row['Project Elapsed Time'] 
+    if row['Project Elapsed Time'] != 0 and pd.notna(row['Functional Size']) 
+    else None, axis=1
+)
+
+# ============================================================================
+# STEP 6: IMPUTE RESOURCE METRICS (Median Imputation)
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 5: Imputing Resource Metrics (Median)")
+print("-" * 50)
+
+resource_cols = [
+    'Resource Level', 'Max Team Size',
+    'Ratio of Project Work Effort to Non-Project Activity'
+]
+
+for col in resource_cols:
+    if data[col].isnull().any():
+        data[col].fillna(data[col].median(), inplace=True)
+
+# ============================================================================
+# STEP 7: IMPUTE CATEGORICAL FEATURES (Co-Imputation)
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 6: Imputing Categorical Features (Co-Imputation)")
+print("-" * 50)
+
+# Group 1 categorical columns
+imputer_1 = SimpleImputer(strategy='most_frequent')
+data[CATEGORICAL_COLS_GROUP1] = imputer_1.fit_transform(data[CATEGORICAL_COLS_GROUP1])
+
+# Group 2 categorical columns
+imputer_2 = SimpleImputer(strategy='most_frequent')
+data[CATEGORICAL_COLS_GROUP2] = imputer_2.fit_transform(data[CATEGORICAL_COLS_GROUP2])
+
+# ============================================================================
+# STEP 8: IMPUTE RELATIVE SIZE
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 7: Imputing Relative Size")
+print("-" * 50)
+
+def impute_relative_size(row):
+    """Derive Relative Size from Adjusted Function Points using ISBSG bands."""
+    afp = row.get('Adjusted Function Points')
+    
+    if pd.isna(row.get('Relative Size')) and pd.notna(afp):
+        if 0 <= afp < 10:
+            row['Relative Size'] = 'XXS Extra-extra-small'
+        elif 10 <= afp < 30:
+            row['Relative Size'] = 'XS Extra-small'
+        elif 30 <= afp < 100:
+            row['Relative Size'] = 'S Small'
+        elif 100 <= afp < 300:
+            row['Relative Size'] = 'M1 Medium1'
+        elif 300 <= afp < 1000:
+            row['Relative Size'] = 'M2 Medium2'
+        elif 1000 <= afp < 3000:
+            row['Relative Size'] = 'L Large'
+        elif 3000 <= afp < 9000:
+            row['Relative Size'] = 'XL Extra-large'
+        elif 9000 <= afp < 18000:
+            row['Relative Size'] = 'XXL Extra-extra-large'
+        elif afp >= 18000:
+            row['Relative Size'] = 'XXXL Extra-extra-extra-large'
+    
+    return row
+
+data = data.apply(impute_relative_size, axis=1)
+
+# ============================================================================
+# STEP 9: IMPUTE LINES OF CODE
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 8: Imputing Lines of Code (Language-Specific Conversion)")
+print("-" * 50)
+
+def impute_loc(row):
+    """Calculate LOC from AFP using language-specific conversion factors."""
+    language = row.get('Primary Programming Language')
+    afp = row.get('Adjusted Function Points')
+    
+    if pd.isna(row.get('Lines of Code')) and language in LOC_CONVERSION_FACTORS and pd.notna(afp):
+        low, high = LOC_CONVERSION_FACTORS[language]
+        conversion_factor = (low + high) / 2
+        row['Lines of Code'] = afp * conversion_factor
+    
+    return row
+
+data = data.apply(impute_loc, axis=1)
+
+# If LOC is still missing, use median
+if data['Lines of Code'].isnull().any():
+    data['Lines of Code'].fillna(data['Lines of Code'].median(), inplace=True)
+
+# ============================================================================
+# STEP 10: ROUND AND SAVE
+# ============================================================================
+
+print("\n" + "-" * 50)
+print("STEP 9: Rounding and Saving")
+print("-" * 50)
+
+# Round numerical columns
+for col in ROUND_COLUMNS:
+    if col in data.columns:
+        data[col] = data[col].round(2)
+
+# Save final dataset
+data.to_csv(OUTPUT_FILE, index=False)
+
+print(f"\nFinal shape: {data.shape}")
+print(f"Missing values after imputation: {data.isnull().sum().sum()}")
+
+print("\n" + "=" * 70)
+print("MANUAL IMPUTATION COMPLETE!")
+print(f"Output saved to: {OUTPUT_FILE}")
+print("=" * 70)
+
+# Display sample of imputed data
+print("\nSample of imputed data:")
+print(data.head())
